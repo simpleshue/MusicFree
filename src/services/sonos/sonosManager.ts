@@ -1,11 +1,14 @@
 import { NativeModules } from "react-native";
 import EventEmitter from "eventemitter3";
 import ReactNativeTrackPlayer from "react-native-track-player";
-import TrackPlayer, { useCurrentMusic } from "@/core/trackPlayer";
+import TrackPlayer from "@/core/trackPlayer";
 import { TrackPlayerEvents } from "@/core.defination/trackPlayer";
 import mediaCache from "@/core/mediaCache";
+import PluginManager from "@/core/pluginManager";
+import Toast from "@/utils/toast";
 import { ISonosDevice, ISonosPositionInfo, ISonosTrackMeta, SonosPlaybackState } from "./types";
 import { UpnpClient } from "./upnpClient";
+import { getSonosSettings, ISonosSettings, saveSonosSettings } from "./settings";
 
 const { SonosModule } = NativeModules;
 
@@ -15,6 +18,8 @@ export enum SonosEvents {
     PlaybackStateChanged = "PlaybackStateChanged",
     PositionUpdated = "PositionUpdated",
     VolumeChanged = "VolumeChanged",
+    LogsUpdated = "LogsUpdated",
+    SettingsUpdated = "SettingsUpdated",
 }
 
 class SonosManager extends EventEmitter {
@@ -26,24 +31,61 @@ class SonosManager extends EventEmitter {
     private playbackState: SonosPlaybackState = "IDLE";
     private positionInfo: ISonosPositionInfo = { trackDuration: 0, relTime: 0, trackUri: "" };
     private volume: number = 20;
+    private logs: string[] = [];
+    private settings: ISonosSettings = getSonosSettings();
 
     constructor() {
         super();
     }
 
+    addLog(msg: string) {
+        const time = new Date().toLocaleTimeString();
+        const logLine = `[${time}] ${msg}`;
+        this.logs.unshift(logLine);
+        if (this.logs.length > 80) this.logs.pop();
+        this.emit(SonosEvents.LogsUpdated, [...this.logs]);
+        console.log(`[SonosManager] ${logLine}`);
+    }
+
+    getLogs(): string[] {
+        return this.logs;
+    }
+
+    clearLogs() {
+        this.logs = [];
+        this.emit(SonosEvents.LogsUpdated, []);
+    }
+
+    getSettings(): ISonosSettings {
+        return this.settings;
+    }
+
+    updateSettings(newSettings: Partial<ISonosSettings>) {
+        this.settings = saveSonosSettings(newSettings);
+        if (SonosModule?.updateSettings) {
+            SonosModule.updateSettings(this.settings);
+        }
+        this.addLog(`Settings updated: format=${this.settings.audioFormat}, buffer=${this.settings.bufferDurationMs}ms`);
+        this.emit(SonosEvents.SettingsUpdated, this.settings);
+    }
+
     init() {
         if (!SonosModule) {
-            console.warn("SonosModule native module not available.");
+            this.addLog("WARN: SonosModule native module not available.");
             return;
         }
+
+        this.addLog("SonosManager initialized.");
 
         // Non-invasively listen for track changes
         TrackPlayer.on(TrackPlayerEvents.CurrentMusicChanged, async (musicItem) => {
             if (this.isCasting && this.activeDevice && musicItem) {
+                this.addLog(`Track changed to: ${musicItem.title}`);
                 try {
                     await this.playTrackOnSonos(musicItem);
-                } catch (e) {
-                    console.error("Failed to play track on Sonos after track change", e);
+                } catch (e: any) {
+                    this.addLog(`ERROR playing track on Sonos: ${e?.message}`);
+                    Toast.warn(`Sonos Error: ${e?.message ?? "Failed to play"}`);
                 }
             }
         });
@@ -51,15 +93,18 @@ class SonosManager extends EventEmitter {
 
     async discoverDevices(timeoutMs = 3500): Promise<ISonosDevice[]> {
         if (!SonosModule?.startDiscovery) {
+            this.addLog("ERROR: startDiscovery method missing in native module.");
             return [];
         }
         try {
+            this.addLog(`Scanning local Wi-Fi for Sonos devices (${timeoutMs}ms)...`);
             const list: ISonosDevice[] = await SonosModule.startDiscovery(timeoutMs);
             this.devices = list;
+            this.addLog(`Discovery finished. Found ${list.length} Sonos device(s).`);
             this.emit(SonosEvents.DevicesUpdated, this.devices);
             return list;
-        } catch (e) {
-            console.warn("Sonos discovery error:", e);
+        } catch (e: any) {
+            this.addLog(`Discovery error: ${e?.message}`);
             return [];
         }
     }
@@ -89,38 +134,49 @@ class SonosManager extends EventEmitter {
     }
 
     async connectAndCast(device: ISonosDevice): Promise<boolean> {
+        this.addLog(`Connecting to: ${device.name} (${device.ip}:${device.port})...`);
+        Toast.success(`Connecting to ${device.name}...`);
+
         try {
             this.activeDevice = device;
             this.isCasting = true;
             this.emit(SonosEvents.ActiveDeviceChanged, this.activeDevice);
 
-            // 1. Start audio proxy server
+            // 1. Start audio proxy server with current settings
             if (!this.proxyBaseUrl && SonosModule?.startAudioProxy) {
-                const proxyInfo = await SonosModule.startAudioProxy();
+                const proxyInfo = await SonosModule.startAudioProxy(this.settings);
                 this.proxyBaseUrl = proxyInfo.baseUrl;
+                this.addLog(`Audio proxy ready at: ${this.proxyBaseUrl}`);
             }
 
-            // 2. Query initial volume
+            // 2. Query initial volume from speaker
             try {
                 this.volume = await UpnpClient.getVolume(device);
+                this.addLog(`Current speaker volume: ${this.volume}%`);
                 this.emit(SonosEvents.VolumeChanged, this.volume);
-            } catch {}
+            } catch (e: any) {
+                this.addLog(`Could not get initial volume: ${e?.message}`);
+            }
 
-            // 3. Mute local phone playback
+            // 3. Mute local phone audio so it only plays via Sonos
             await ReactNativeTrackPlayer.setVolume(0);
 
-            // 4. Play current track
+            // 4. Resolve and play the current music
             const currentMusic = TrackPlayer.currentMusic;
             if (currentMusic) {
                 await this.playTrackOnSonos(currentMusic);
+            } else {
+                this.addLog("No track currently selected. Tap any song to play on Sonos.");
+                Toast.success(`Connected to ${device.name}. Play a song to cast!`);
             }
 
             // 5. Start position and state polling
             this.startPolling();
 
             return true;
-        } catch (e) {
-            console.error("Failed to connect and cast to Sonos:", e);
+        } catch (e: any) {
+            this.addLog(`Failed to connect/cast: ${e?.message}`);
+            Toast.warn(`Cast failed: ${e?.message ?? "Unknown error"}`);
             await this.disconnect();
             return false;
         }
@@ -130,6 +186,7 @@ class SonosManager extends EventEmitter {
         this.stopPolling();
 
         if (this.activeDevice) {
+            this.addLog(`Disconnecting from ${this.activeDevice.name}...`);
             try {
                 await UpnpClient.stop(this.activeDevice);
             } catch {}
@@ -147,42 +204,46 @@ class SonosManager extends EventEmitter {
 
         this.emit(SonosEvents.ActiveDeviceChanged, null);
         this.emit(SonosEvents.PlaybackStateChanged, "IDLE");
+        this.addLog("Disconnected from Sonos. Phone audio restored.");
+        Toast.success("Disconnected from Sonos");
     }
 
     async play(): Promise<void> {
         if (!this.activeDevice || !this.isCasting) return;
         try {
+            this.addLog("Sending Play command to Sonos...");
             await UpnpClient.play(this.activeDevice);
             this.playbackState = "PLAYING";
             this.emit(SonosEvents.PlaybackStateChanged, "PLAYING");
-            // Also sync local TrackPlayer state without un-muting
             TrackPlayer.play();
-        } catch (e) {
-            console.warn("Sonos play error:", e);
+        } catch (e: any) {
+            this.addLog(`Sonos play error: ${e?.message}`);
         }
     }
 
     async pause(): Promise<void> {
         if (!this.activeDevice || !this.isCasting) return;
         try {
+            this.addLog("Sending Pause command to Sonos...");
             await UpnpClient.pause(this.activeDevice);
             this.playbackState = "PAUSED_PLAYBACK";
             this.emit(SonosEvents.PlaybackStateChanged, "PAUSED_PLAYBACK");
             TrackPlayer.pause();
-        } catch (e) {
-            console.warn("Sonos pause error:", e);
+        } catch (e: any) {
+            this.addLog(`Sonos pause error: ${e?.message}`);
         }
     }
 
     async seekTo(seconds: number): Promise<void> {
         if (!this.activeDevice || !this.isCasting) return;
         try {
+            this.addLog(`Seeking Sonos to ${seconds.toFixed(0)}s...`);
             await UpnpClient.seek(this.activeDevice, seconds);
             this.positionInfo.relTime = seconds;
             this.emit(SonosEvents.PositionUpdated, this.positionInfo);
             TrackPlayer.seekTo(seconds);
-        } catch (e) {
-            console.warn("Sonos seek error:", e);
+        } catch (e: any) {
+            this.addLog(`Sonos seek error: ${e?.message}`);
         }
     }
 
@@ -192,63 +253,123 @@ class SonosManager extends EventEmitter {
             await UpnpClient.setVolume(this.activeDevice, vol);
             this.volume = vol;
             this.emit(SonosEvents.VolumeChanged, this.volume);
-        } catch (e) {
-            console.warn("Sonos setVolume error:", e);
+        } catch (e: any) {
+            this.addLog(`Sonos setVolume error: ${e?.message}`);
         }
+    }
+
+    private async resolveTrackSource(
+        musicItem: IMusic.IMusicItem
+    ): Promise<{ url: string; headers: Record<string, string> }> {
+        // 1. Check if ReactNativeTrackPlayer currently has a real URL loaded
+        try {
+            const queue = await ReactNativeTrackPlayer.getQueue();
+            if (
+                queue &&
+                queue[0] &&
+                queue[0].url &&
+                !queue[0].url.startsWith("musicfree://")
+            ) {
+                return {
+                    url: queue[0].url,
+                    headers: (queue[0].headers as Record<string, string>) || {},
+                };
+            }
+        } catch {}
+
+        // 2. Check mediaCache
+        const cached = mediaCache.getMediaCache(musicItem) as IMusic.IMusicItem | null;
+        if (cached?.url && !cached.url.startsWith("musicfree://")) {
+            return { url: cached.url, headers: {} };
+        }
+
+        // 3. Check musicItem sources
+        if (musicItem.source) {
+            const qualities = ["128k", "320k", "flac", "standard", "super", "high", "low"];
+            for (const q of qualities) {
+                if (musicItem.source[q]?.url) {
+                    return {
+                        url: musicItem.source[q]!.url,
+                        headers: (musicItem.source[q]!.headers as Record<string, string>) || {},
+                    };
+                }
+            }
+        }
+
+        // 4. Query plugin directly if available
+        if (musicItem.platform) {
+            try {
+                const plugin = PluginManager.getByName(musicItem.platform);
+                if (plugin?.methods?.getMediaSource) {
+                    this.addLog(`Resolving stream from plugin: ${musicItem.platform}...`);
+                    const src = await plugin.methods.getMediaSource(musicItem, "standard");
+                    if (src?.url) {
+                        return {
+                            url: src.url,
+                            headers: (src.headers as Record<string, string>) || {},
+                        };
+                    }
+                }
+            } catch (e: any) {
+                this.addLog(`Plugin getMediaSource notice: ${e?.message}`);
+            }
+        }
+
+        if (musicItem.url && !musicItem.url.startsWith("musicfree://")) {
+            return { url: musicItem.url, headers: {} };
+        }
+
+        throw new Error(`No audio stream URL available for "${musicItem.title}".`);
     }
 
     private async playTrackOnSonos(musicItem: IMusic.IMusicItem): Promise<void> {
         if (!this.activeDevice) return;
 
-        // Resolve audio source (check cached media item first, then musicItem properties)
-        const cached = mediaCache.getMediaCache(musicItem) as IMusic.IMusicItem | null;
-        const targetItem = cached ?? musicItem;
+        this.addLog(`Resolving audio source for: "${musicItem.title}" - ${musicItem.artist}...`);
+        const { url: realUrl, headers } = await this.resolveTrackSource(musicItem);
+        this.addLog(`Stream resolved: ${realUrl.substring(0, 60)}... (headers: ${Object.keys(headers).length})`);
 
-        let realUrl = targetItem.url;
-        let headers: Record<string, string> = {};
+        // Check if direct streaming is requested and possible
+        let streamUrl: string;
+        const hasHeaders = Object.keys(headers).length > 0;
+        const isRemoteHttp = realUrl.startsWith("http://") || realUrl.startsWith("https://");
 
-        if (targetItem.source) {
-            // Find highest available quality source
-            const qualities = ["128k", "320k", "flac", "standard", "super", "high", "low"];
-            for (const q of qualities) {
-                if (targetItem.source[q]?.url) {
-                    realUrl = targetItem.source[q]!.url;
-                    headers = (targetItem.source[q]!.headers as Record<string, string>) ?? {};
-                    break;
-                }
-            }
+        if (this.settings.directStreaming && !hasHeaders && isRemoteHttp) {
+            streamUrl = realUrl;
+            this.addLog("Using Direct Stream URL (bypassing proxy).");
+        } else {
+            streamUrl = this.buildProxyUrl(realUrl, headers);
+            this.addLog(`Using Local Audio Proxy URL: ${streamUrl.substring(0, 70)}...`);
         }
-
-        if (!realUrl) {
-            console.warn("No real URL found for Sonos track:", targetItem.title);
-            return;
-        }
-
-        // Generate proxy URL
-        const proxyStreamUrl = this.buildProxyUrl(realUrl, headers);
 
         const meta: ISonosTrackMeta = {
-            title: targetItem.title,
-            artist: targetItem.artist,
-            album: targetItem.album,
-            albumArtUrl: targetItem.artwork,
-            duration: targetItem.duration,
+            title: musicItem.title,
+            artist: musicItem.artist,
+            album: musicItem.album,
+            albumArtUrl: musicItem.artwork,
+            duration: musicItem.duration,
         };
 
-        await UpnpClient.setAVTransportURI(this.activeDevice, proxyStreamUrl, meta);
+        this.addLog(`Sending SetAVTransportURI to ${this.activeDevice.name}...`);
+        await UpnpClient.setAVTransportURI(this.activeDevice, streamUrl, meta);
+
+        this.addLog(`Sending Play to ${this.activeDevice.name}...`);
         await UpnpClient.play(this.activeDevice);
+
         this.playbackState = "PLAYING";
         this.emit(SonosEvents.PlaybackStateChanged, "PLAYING");
+        this.addLog(`Playback successfully initiated on ${this.activeDevice.name}!`);
+        Toast.success(`Playing on ${this.activeDevice.name}`);
     }
 
     private buildProxyUrl(rawUrl: string, headers: Record<string, string>): string {
         if (!this.proxyBaseUrl) {
             return rawUrl;
         }
-        // Base64 encode parameters for clean URL transport
-        const encodedUrl = Buffer.from(rawUrl).toString("base64");
-        const encodedHeaders = Buffer.from(JSON.stringify(headers)).toString("base64");
-        return `${this.proxyBaseUrl}/stream?url=${encodeURIComponent(encodedUrl)}&headers=${encodeURIComponent(encodedHeaders)}`;
+        // Use pure standard encodeURIComponent (100% React Native safe, no Node Buffer)
+        const encodedUrl = encodeURIComponent(rawUrl);
+        const encodedHeaders = encodeURIComponent(JSON.stringify(headers || {}));
+        return `${this.proxyBaseUrl}/stream?url=${encodedUrl}&headers=${encodedHeaders}`;
     }
 
     private startPolling() {

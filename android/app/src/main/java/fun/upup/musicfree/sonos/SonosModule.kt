@@ -10,6 +10,8 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.*
 import java.net.*
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.*
 
 class SonosModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
@@ -20,6 +22,42 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
     private var proxyExecutor: ExecutorService? = null
     private var isProxyRunning = false
     private val TAG = "SonosModule"
+
+    // Casting Settings
+    private var audioFormat: String = "original"
+    private var wavStreamingMethod: String = "chunked"
+    private var sampleRate: Int = 44100
+    private var bufferDurationMs: Int = 1000
+
+    // In-memory debug logs buffer
+    private val nativeLogs = ConcurrentLinkedQueue<String>()
+
+    private fun addLog(msg: String) {
+        Log.i(TAG, msg)
+        val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        nativeLogs.add("[$time] $msg")
+        while (nativeLogs.size > 80) {
+            nativeLogs.poll()
+        }
+    }
+
+    @ReactMethod
+    fun getNativeLogs(promise: Promise) {
+        val arr = Arguments.createArray()
+        for (line in nativeLogs) {
+            arr.pushString(line)
+        }
+        promise.resolve(arr)
+    }
+
+    @ReactMethod
+    fun updateSettings(settings: ReadableMap) {
+        if (settings.hasKey("audioFormat")) audioFormat = settings.getString("audioFormat") ?: "original"
+        if (settings.hasKey("wavStreamingMethod")) wavStreamingMethod = settings.getString("wavStreamingMethod") ?: "chunked"
+        if (settings.hasKey("sampleRate")) sampleRate = settings.getInt("sampleRate")
+        if (settings.hasKey("bufferDurationMs")) bufferDurationMs = settings.getInt("bufferDurationMs")
+        addLog("Updated settings: format=$audioFormat, wavMethod=$wavStreamingMethod, rate=$sampleRate, buffer=${bufferDurationMs}ms")
+    }
 
     @ReactMethod
     fun getLocalIpAddress(promise: Promise) {
@@ -46,6 +84,8 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
 
             val discoveredDevices = ConcurrentHashMap<String, WritableMap>()
             val timeout = if (timeoutMs > 0) timeoutMs.toInt() else 3500
+
+            addLog("Starting Sonos discovery (timeout: ${timeout}ms)...")
 
             try {
                 // 1. SSDP Multicast Search
@@ -84,23 +124,23 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
                                     if (dev != null) {
                                         val id = dev.getString("id") ?: location
                                         discoveredDevices[id] = dev
+                                        addLog("Found Sonos via SSDP: ${dev.getString("name")} at ${dev.getString("ip")}")
                                     }
                                 }
                             } catch (e: SocketTimeoutException) {
                                 break
                             } catch (e: Exception) {
-                                // continue reading until timeout
+                                // continue
                             }
                         }
                         socket.close()
                     } catch (e: Exception) {
-                        Log.w(TAG, "SSDP search error: ${e.message}")
+                        addLog("SSDP search notice: ${e.message}")
                     }
                 }
                 ssdpThread.start()
 
-                // 2. Fallback Fast Subnet Sweep for Sonos (Port 1400)
-                // In case Wi-Fi router drops multicast between bands
+                // 2. Subnet port 1400 probe fallback
                 val localIp = getActiveLocalIp()
                 if (localIp != null && localIp.contains(".")) {
                     val prefix = localIp.substringBeforeLast(".")
@@ -122,7 +162,10 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
                                     val dev = parseDeviceXml(conn.inputStream, targetIp, 1400)
                                     if (dev != null) {
                                         val id = dev.getString("id") ?: targetIp
-                                        discoveredDevices[id] = dev
+                                        if (!discoveredDevices.containsKey(id)) {
+                                            discoveredDevices[id] = dev
+                                            addLog("Found Sonos via Port 1400: ${dev.getString("name")} at $targetIp")
+                                        }
                                     }
                                 }
                                 conn.disconnect()
@@ -139,9 +182,11 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
                 for (dev in discoveredDevices.values) {
                     resultList.pushMap(dev)
                 }
+                addLog("Discovery complete. Total devices: ${discoveredDevices.size}")
                 promise.resolve(resultList)
 
             } catch (e: Exception) {
+                addLog("Discovery error: ${e.message}")
                 promise.reject("DISCOVERY_ERROR", e.message)
             } finally {
                 try {
@@ -244,7 +289,11 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
     }
 
     @ReactMethod
-    fun startAudioProxy(promise: Promise) {
+    fun startAudioProxy(settings: ReadableMap?, promise: Promise) {
+        if (settings != null) {
+            updateSettings(settings)
+        }
+
         if (isProxyRunning && proxyServer != null && !proxyServer!!.isClosed) {
             val localIp = getActiveLocalIp() ?: "127.0.0.1"
             val port = proxyServer!!.localPort
@@ -263,6 +312,8 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
             isProxyRunning = true
             val localPort = server.localPort
             val localIp = getActiveLocalIp() ?: "127.0.0.1"
+
+            addLog("Proxy server started on http://$localIp:$localPort")
 
             proxyExecutor = Executors.newCachedThreadPool()
             proxyExecutor?.execute {
@@ -285,6 +336,7 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
             }
             promise.resolve(res)
         } catch (e: Exception) {
+            addLog("Failed to start proxy server: ${e.message}")
             promise.reject("PROXY_ERROR", "Failed to start proxy server: ${e.message}")
         }
     }
@@ -297,6 +349,7 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
             proxyServer = null
             proxyExecutor?.shutdownNow()
             proxyExecutor = null
+            addLog("Proxy server stopped.")
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("PROXY_ERROR", e.message)
@@ -309,13 +362,20 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
             val input = BufferedReader(InputStreamReader(client.getInputStream()))
             val firstLine = input.readLine() ?: return
             val parts = firstLine.split(" ")
-            if (parts.size < 2 || parts[0] != "GET") {
+            if (parts.size < 2) {
+                client.close()
+                return
+            }
+
+            val method = parts[0].uppercase(Locale.getDefault())
+            if (method != "GET" && method != "HEAD") {
+                addLog("Proxy rejected method: $method")
+                sendErrorResponse(client, 405, "Method Not Allowed")
                 client.close()
                 return
             }
 
             val requestPath = parts[1]
-            // Read headers from Sonos (e.g. Range header)
             var rangeHeader: String? = null
             var line: String? = input.readLine()
             while (!line.isNullOrEmpty()) {
@@ -337,17 +397,29 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
                 return
             }
 
-            val targetUrl = try {
-                String(Base64.decode(rawTargetUrl, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)
-            } catch (e: Exception) {
-                URLDecoder.decode(rawTargetUrl, "UTF-8")
+            // Decode URL safely (supporting both standard URL encoding and Base64)
+            val decodedUrlParam = URLDecoder.decode(rawTargetUrl, "UTF-8")
+            val targetUrl = if (decodedUrlParam.startsWith("http://") || decodedUrlParam.startsWith("https://") ||
+                decodedUrlParam.startsWith("file://") || decodedUrlParam.startsWith("/")) {
+                decodedUrlParam
+            } else {
+                try {
+                    String(Base64.decode(decodedUrlParam, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)
+                } catch (e: Exception) {
+                    decodedUrlParam
+                }
             }
 
             val headersMap = mutableMapOf<String, String>()
             if (!rawHeaders.isNullOrEmpty()) {
                 try {
-                    val decodedHeaders = String(Base64.decode(rawHeaders, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)
-                    val json = JSONObject(decodedHeaders)
+                    val decodedHeaders = URLDecoder.decode(rawHeaders, "UTF-8")
+                    val jsonStr = if (decodedHeaders.startsWith("{")) {
+                        decodedHeaders
+                    } else {
+                        String(Base64.decode(decodedHeaders, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)
+                    }
+                    val json = JSONObject(jsonStr)
                     val keys = json.keys()
                     while (keys.hasNext()) {
                         val k = keys.next()
@@ -356,20 +428,40 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
                 } catch (ignored: Exception) {}
             }
 
+            addLog("Proxy handling $method request for: ${targetUrl.take(60)}... Range: $rangeHeader")
+
             if (targetUrl.startsWith("file://") || targetUrl.startsWith("/")) {
-                serveLocalFile(client, targetUrl, rangeHeader)
+                serveLocalFile(client, targetUrl, rangeHeader, method == "HEAD")
             } else {
-                relayRemoteHttpStream(client, targetUrl, headersMap, rangeHeader)
+                relayRemoteHttpStream(client, targetUrl, headersMap, rangeHeader, method == "HEAD")
             }
 
         } catch (e: Exception) {
-            Log.w(TAG, "Proxy client handler error: ${e.message}")
+            addLog("Proxy client error: ${e.message}")
         } finally {
             try { client.close() } catch (ignored: Exception) {}
         }
     }
 
-    private fun serveLocalFile(client: Socket, filePathStr: String, rangeHeader: String?) {
+    private fun getBufferSize(): Int {
+        return when {
+            bufferDurationMs >= 5000 -> 131072 // 128KB
+            bufferDurationMs >= 2000 -> 65536  // 64KB
+            bufferDurationMs >= 1000 -> 32768  // 32KB
+            else -> 16384                      // 16KB
+        }
+    }
+
+    private fun getTargetContentType(detectedType: String?): String {
+        return when (audioFormat.lowercase(Locale.getDefault())) {
+            "wav" -> "audio/wav"
+            "mp3" -> "audio/mpeg"
+            "flac" -> "audio/flac"
+            else -> detectedType ?: "audio/mpeg"
+        }
+    }
+
+    private fun serveLocalFile(client: Socket, filePathStr: String, rangeHeader: String?, isHeadOnly: Boolean) {
         val cleanPath = filePathStr.removePrefix("file://")
         val file = File(cleanPath)
         if (!file.exists() || !file.isFile) {
@@ -379,7 +471,6 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
 
         val fileLength = file.length()
         val out = BufferedOutputStream(client.getOutputStream())
-        val raf = RandomAccessFile(file, "r")
 
         var start: Long = 0
         var end = fileLength - 1
@@ -394,6 +485,7 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
 
         val contentLength = end - start + 1
         val isPartial = rangeHeader != null
+        val contentType = getTargetContentType(guessContentType(cleanPath))
 
         val responseHeader = StringBuilder()
         if (isPartial) {
@@ -402,15 +494,22 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
         } else {
             responseHeader.append("HTTP/1.1 200 OK\r\n")
         }
-        responseHeader.append("Content-Type: audio/mpeg\r\n")
+        responseHeader.append("Content-Type: $contentType\r\n")
         responseHeader.append("Content-Length: $contentLength\r\n")
         responseHeader.append("Accept-Ranges: bytes\r\n")
         responseHeader.append("Connection: close\r\n\r\n")
 
         out.write(responseHeader.toString().toByteArray(Charsets.UTF_8))
+        out.flush()
 
+        if (isHeadOnly) {
+            return
+        }
+
+        val raf = RandomAccessFile(file, "r")
         raf.seek(start)
-        val buffer = ByteArray(32768)
+        val bufSize = getBufferSize()
+        val buffer = ByteArray(bufSize)
         var bytesRemaining = contentLength
         while (bytesRemaining > 0) {
             val toRead = minOf(buffer.size.toLong(), bytesRemaining).toInt()
@@ -427,13 +526,18 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
         client: Socket,
         targetUrl: String,
         customHeaders: Map<String, String>,
-        rangeHeader: String?
+        rangeHeader: String?,
+        isHeadOnly: Boolean
     ) {
         val url = URL(targetUrl)
         val conn = url.openConnection() as HttpURLConnection
         conn.connectTimeout = 8000
-        conn.readTimeout = 12000
+        conn.readTimeout = 15000
         conn.instanceFollowRedirects = true
+
+        if (isHeadOnly) {
+            conn.requestMethod = "HEAD"
+        }
 
         for ((k, v) in customHeaders) {
             conn.setRequestProperty(k, v)
@@ -449,30 +553,54 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
         val out = BufferedOutputStream(client.getOutputStream())
         val inStream = if (isError) conn.errorStream ?: conn.inputStream else conn.inputStream
 
+        val upstreamContentType = conn.getHeaderField("Content-Type")
+        val finalContentType = getTargetContentType(upstreamContentType)
+
         val headerBuilder = StringBuilder()
         headerBuilder.append("HTTP/1.1 $responseCode ${conn.responseMessage}\r\n")
+        headerBuilder.append("Content-Type: $finalContentType\r\n")
 
-        val passThroughHeaders = listOf("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges")
+        val passThroughHeaders = listOf("Content-Length", "Content-Range", "Accept-Ranges")
         for (h in passThroughHeaders) {
             val v = conn.getHeaderField(h)
             if (v != null) {
                 headerBuilder.append("$h: $v\r\n")
             }
         }
-        if (conn.getHeaderField("Content-Type") == null) {
-            headerBuilder.append("Content-Type: audio/mpeg\r\n")
+        if (conn.getHeaderField("Accept-Ranges") == null) {
+            headerBuilder.append("Accept-Ranges: bytes\r\n")
         }
         headerBuilder.append("Connection: close\r\n\r\n")
         out.write(headerBuilder.toString().toByteArray(Charsets.UTF_8))
-
-        val buffer = ByteArray(32768)
-        var read: Int
-        while (inStream.read(buffer).also { read = it } != -1) {
-            out.write(buffer, 0, read)
-        }
         out.flush()
-        inStream.close()
+
+        if (isHeadOnly) {
+            inStream?.close()
+            conn.disconnect()
+            return
+        }
+
+        val bufSize = getBufferSize()
+        val buffer = ByteArray(bufSize)
+        var read: Int
+        if (inStream != null) {
+            while (inStream.read(buffer).also { read = it } != -1) {
+                out.write(buffer, 0, read)
+            }
+            out.flush()
+            inStream.close()
+        }
         conn.disconnect()
+    }
+
+    private fun guessContentType(path: String): String {
+        return when {
+            path.endsWith(".mp3", ignoreCase = true) -> "audio/mpeg"
+            path.endsWith(".wav", ignoreCase = true) -> "audio/wav"
+            path.endsWith(".flac", ignoreCase = true) -> "audio/flac"
+            path.endsWith(".m4a", ignoreCase = true) || path.endsWith(".aac", ignoreCase = true) -> "audio/mp4"
+            else -> "audio/mpeg"
+        }
     }
 
     private fun sendErrorResponse(client: Socket, code: Int, message: String) {
