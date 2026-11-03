@@ -72,7 +72,7 @@ react {
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */
-def enableProguardInReleaseBuilds = false
+def enableProguardInReleaseBuilds = true
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -125,7 +125,7 @@ android {
     namespace "fun.upup.musicfree"
 
     defaultConfig {
-        applicationId "fun.upup.musicfree"
+        applicationId "com.jsxx.musicfreexx"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode appVersionCode
