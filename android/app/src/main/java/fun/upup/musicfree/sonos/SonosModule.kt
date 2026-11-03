@@ -119,7 +119,7 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
                                 conn.readTimeout = 400
                                 conn.requestMethod = "GET"
                                 if (conn.responseCode == 200) {
-                                    val dev = parseDeviceXml(conn.inputStream, targetIp, 1400, urlStr)
+                                    val dev = parseDeviceXml(conn.inputStream, targetIp, 1400)
                                     if (dev != null) {
                                         val id = dev.getString("id") ?: targetIp
                                         discoveredDevices[id] = dev
@@ -172,7 +172,7 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
             conn.connectTimeout = 1500
             conn.readTimeout = 2000
             if (conn.responseCode == 200) {
-                val map = parseDeviceXml(conn.inputStream, url.host, url.port, locationUrl)
+                val map = parseDeviceXml(conn.inputStream, url.host, url.port)
                 conn.disconnect()
                 map
             } else {
@@ -184,7 +184,7 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
         }
     }
 
-    private fun parseDeviceXml(inputStream: InputStream, host: String, port: Int, locationUrl: String): WritableMap? {
+    private fun parseDeviceXml(inputStream: InputStream, host: String, port: Int): WritableMap? {
         return try {
             val factory = XmlPullParserFactory.newInstance()
             val parser = factory.newPullParser()
