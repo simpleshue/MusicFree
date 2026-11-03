@@ -1,5 +1,7 @@
-import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import SonosDevicePicker, { CastIcon } from "@/components/sonos/SonosDevicePicker";
+import sonosManager, { SonosEvents } from "@/services/sonos/sonosManager";
 import rpx from "@/utils/rpx";
 import { useNavigation } from "@react-navigation/native";
 import Tag from "@/components/base/tag";
@@ -12,9 +14,19 @@ import { useCurrentMusic } from "@/core/trackPlayer";
 export default function NavBar() {
     const navigation = useNavigation();
     const musicItem = useCurrentMusic();
-    // const {showShare} = useShare();
+    const [showSonosPicker, setShowSonosPicker] = useState(false);
+    const [isCasting, setIsCasting] = useState(sonosManager.getIsCasting());
+
+    useEffect(() => {
+        const onActiveChanged = () => setIsCasting(sonosManager.getIsCasting());
+        sonosManager.on(SonosEvents.ActiveDeviceChanged, onActiveChanged);
+        return () => {
+            sonosManager.off(SonosEvents.ActiveDeviceChanged, onActiveChanged);
+        };
+    }, []);
 
     return (
+        <>
         <View style={styles.container}>
             <IconButton
                 name="arrow-left"
@@ -59,7 +71,23 @@ export default function NavBar() {
                     } catch {}
                 }}
             />
+            <TouchableOpacity
+                style={styles.castButton}
+                onPress={() => setShowSonosPicker(true)}>
+                <CastIcon size={rpx(44)} color={isCasting ? "#1890ff" : "white"} />
+            </TouchableOpacity>
+            <IconButton
+                style={{ display: "none" }}
+                name="share"
+                onPress={() => {
+                }}
+            />
         </View>
+            <SonosDevicePicker
+                visible={showSonosPicker}
+                onClose={() => setShowSonosPicker(false)}
+            />
+        </>
     );
 }
 
@@ -70,6 +98,10 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
+    },
+    castButton: {
+        marginHorizontal: rpx(20),
+        padding: rpx(8),
     },
     button: {
         marginHorizontal: rpx(24),

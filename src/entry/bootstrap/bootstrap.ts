@@ -26,6 +26,7 @@ import RNTrackPlayer, { AppKilledPlaybackBehavior, Capability } from "react-nati
 import i18n from "@/core/i18n";
 import bootstrapAtom from "./bootstrap.atom";
 import { getDefaultStore } from "jotai";
+import sonosManager from "@/services/sonos/sonosManager";
 
 
 // 依赖管理
@@ -35,6 +36,7 @@ TrackPlayer.injectDependencies(Config, musicHistory, PluginManager);
 downloader.injectDependencies(Config, PluginManager);
 lyricManager.injectDependencies(TrackPlayer, Config, PluginManager);
 MusicSheet.injectDependencies(Config);
+sonosManager.init();
 
 
 async function bootstrapImpl() {

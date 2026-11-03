@@ -29,6 +29,7 @@ class MainApplication : Application(), ReactApplication {
               add(UtilsPackage())
               add(Mp3UtilPackage())
               add(LyricUtilPackage())
+              add(`fun`.upup.musicfree.sonos.SonosPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"
