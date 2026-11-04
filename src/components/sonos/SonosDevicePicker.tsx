@@ -130,7 +130,7 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                 <View style={styles.headerTitleRow}>
                                     <CastIcon size={rpx(36)} color={colors.text} />
                                     <ThemeText fontSize="title" fontWeight="bold" style={styles.titleText}>
-                                        Cast to Sonos
+                                        Cast to a device
                                     </ThemeText>
                                 </View>
                                 <View style={styles.headerButtons}>
@@ -141,7 +141,7 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                             fontSize="description"
                                             fontWeight={currentTab === "devices" ? "bold" : "regular"}
                                             fontColor={currentTab === "devices" ? "textHighlight" : "textSecondary"}>
-                                            Speakers
+                                            Devices
                                         </ThemeText>
                                     </TouchableOpacity>
                                     <TouchableOpacity
@@ -219,7 +219,7 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
 
                                     <View style={styles.sectionHeaderRow}>
                                         <ThemeText fontColor="textSecondary" fontSize="description" style={styles.sectionTitle}>
-                                            AVAILABLE SPEAKERS
+                                            AVAILABLE DEVICES
                                         </ThemeText>
                                         <TouchableOpacity
                                             style={styles.actionBtn}
@@ -243,10 +243,10 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                                 ) : (
                                                     <>
                                                         <ThemeText fontColor="textSecondary" style={styles.emptyText}>
-                                                            No Sonos speakers found.
+                                                            No devices found.
                                                         </ThemeText>
                                                         <ThemeText fontColor="textSecondary" fontSize="description" style={styles.emptySubText}>
-                                                            Ensure your phone and Sonos are on the same Wi-Fi network.
+                                                            Ensure your phone and device are on the same Wi-Fi network.
                                                         </ThemeText>
                                                     </>
                                                 )}

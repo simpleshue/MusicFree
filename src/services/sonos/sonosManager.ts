@@ -85,7 +85,7 @@ class SonosManager extends EventEmitter {
                     await this.playTrackOnSonos(musicItem);
                 } catch (e: any) {
                     this.addLog(`ERROR playing track on Sonos: ${e?.message}`);
-                    Toast.warn(`Sonos Error: ${e?.message ?? "Failed to play"}`);
+                    Toast.warn(`Cast Error: ${e?.message ?? "Failed to play"}`);
                 }
             }
         });
@@ -204,8 +204,8 @@ class SonosManager extends EventEmitter {
 
         this.emit(SonosEvents.ActiveDeviceChanged, null);
         this.emit(SonosEvents.PlaybackStateChanged, "IDLE");
-        this.addLog("Disconnected from Sonos. Phone audio restored.");
-        Toast.success("Disconnected from Sonos");
+        this.addLog("Disconnected from device. Phone audio restored.");
+        Toast.success("Disconnected from device");
     }
 
     async play(): Promise<void> {
