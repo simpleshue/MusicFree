@@ -143,8 +143,8 @@ class SonosManager extends EventEmitter {
             this.emit(SonosEvents.ActiveDeviceChanged, this.activeDevice);
 
             // 1. Start audio proxy server with current settings
-            if (!this.proxyBaseUrl && SonosModule?.startAudioProxy) {
-                const proxyInfo = await SonosModule.startAudioProxy(this.settings);
+            if (SonosModule?.startAudioProxy) {
+                const proxyInfo = await SonosModule.startAudioProxy(this.settings, device.ip);
                 this.proxyBaseUrl = proxyInfo.baseUrl;
                 this.addLog(`Audio proxy ready at: ${this.proxyBaseUrl}`);
             }
@@ -338,6 +338,10 @@ class SonosManager extends EventEmitter {
             streamUrl = realUrl;
             this.addLog("Using Direct Stream URL (bypassing proxy).");
         } else {
+            if (!this.proxyBaseUrl && SonosModule?.startAudioProxy) {
+                const proxyInfo = await SonosModule.startAudioProxy(this.settings, this.activeDevice.ip);
+                this.proxyBaseUrl = proxyInfo.baseUrl;
+            }
             streamUrl = this.buildProxyUrl(realUrl, headers);
             this.addLog(`Using Local Audio Proxy URL: ${streamUrl.substring(0, 70)}...`);
         }

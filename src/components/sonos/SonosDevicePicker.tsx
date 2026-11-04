@@ -179,16 +179,16 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                     {activeDevice ? (
                                         <View style={[styles.activeCard, { borderColor: colors.textHighlight || "#1890ff" }]}>
                                             <View style={styles.activeHeader}>
-                                                <View>
-                                                    <ThemeText fontWeight="bold" fontSize="subTitle">
+                                                <View style={{ flex: 1, marginRight: rpx(16) }}>
+                                                    <ThemeText fontWeight="bold" fontSize="subTitle" numberOfLines={1} ellipsizeMode="tail">
                                                         Connected: {activeDevice.name}
                                                     </ThemeText>
-                                                    <ThemeText fontColor="textSecondary" fontSize="description">
+                                                    <ThemeText fontColor="textSecondary" fontSize="description" numberOfLines={1} ellipsizeMode="tail">
                                                         {activeDevice.model} ({activeDevice.ip})
                                                     </ThemeText>
                                                 </View>
                                                 <TouchableOpacity
-                                                    style={[styles.disconnectBtn, { backgroundColor: "#e53935" }]}
+                                                    style={[styles.disconnectBtn, { backgroundColor: "#e53935", flexShrink: 0 }]}
                                                     onPress={handleDisconnect}>
                                                     <ThemeText style={styles.btnText} fontWeight="bold">
                                                         Disconnect
@@ -265,10 +265,10 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                                         ]}
                                                         onPress={() => handleSelectDevice(dev)}>
                                                         <View style={styles.deviceInfo}>
-                                                            <ThemeText fontWeight="medium" fontSize="subTitle">
+                                                            <ThemeText fontWeight="medium" fontSize="subTitle" numberOfLines={1} ellipsizeMode="tail">
                                                                 {dev.name}
                                                             </ThemeText>
-                                                            <ThemeText fontColor="textSecondary" fontSize="description">
+                                                            <ThemeText fontColor="textSecondary" fontSize="description" numberOfLines={1} ellipsizeMode="tail">
                                                                 {dev.model} • {dev.ip}
                                                             </ThemeText>
                                                         </View>
