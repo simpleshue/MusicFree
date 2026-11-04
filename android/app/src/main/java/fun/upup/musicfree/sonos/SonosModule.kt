@@ -5,6 +5,7 @@ import android.net.wifi.WifiManager
 import android.util.Base64
 import android.util.Log
 import com.facebook.react.bridge.*
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
@@ -35,10 +36,18 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
     private fun addLog(msg: String) {
         Log.i(TAG, msg)
         val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        nativeLogs.add("[$time] $msg")
+        val formatted = "[$time] [Native] $msg"
+        nativeLogs.add(formatted)
         while (nativeLogs.size > 80) {
             nativeLogs.poll()
         }
+        try {
+            if (reactContext.hasActiveReactInstance()) {
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    ?.emit("SonosNativeLog", formatted)
+            }
+        } catch (ignored: Exception) {}
     }
 
     @ReactMethod
@@ -48,6 +57,11 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
             arr.pushString(line)
         }
         promise.resolve(arr)
+    }
+
+    @ReactMethod
+    fun clearNativeLogs() {
+        nativeLogs.clear()
     }
 
     @ReactMethod
@@ -496,7 +510,8 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
                 } catch (ignored: Exception) {}
             }
 
-            addLog("Proxy handling $method request for: ${targetUrl.take(60)}... Range: $rangeHeader")
+            val clientIp = client.inetAddress?.hostAddress ?: "unknown"
+            addLog("Sonos ($clientIp) requested: $method (Range: $rangeHeader)")
 
             if (targetUrl.startsWith("file://") || targetUrl.startsWith("/")) {
                 serveLocalFile(client, targetUrl, rangeHeader, method == "HEAD")
@@ -656,10 +671,13 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
             val responseCode = conn.responseCode
             val isError = responseCode >= 400
 
+            val upstreamContentType = conn.getHeaderField("Content-Type")
+            val upstreamContentLength = conn.getHeaderField("Content-Length")
+            addLog("Upstream CDN responded: HTTP $responseCode, Type: $upstreamContentType, Size: ${upstreamContentLength ?: "chunked"}")
+
             val out = BufferedOutputStream(client.getOutputStream())
             val inStream = if (isError) conn.errorStream ?: conn.inputStream else conn.inputStream
 
-            val upstreamContentType = conn.getHeaderField("Content-Type")
             val finalContentType = getTargetContentType(upstreamContentType)
 
             // When isHeadOnly, if upstream returned 206 (for our 0-1 probe), Sonos expects 200 OK for HEAD
@@ -712,14 +730,17 @@ class SonosModule(private val reactContext: ReactApplicationContext) : ReactCont
             val bufSize = getBufferSize()
             val buffer = ByteArray(bufSize)
             var read: Int
+            var totalBytesSent = 0L
             if (inStream != null) {
                 while (inStream.read(buffer).also { read = it } != -1) {
                     out.write(buffer, 0, read)
+                    totalBytesSent += read
                 }
                 out.flush()
                 inStream.close()
             }
             conn.disconnect()
+            addLog("Stream relayed: $totalBytesSent bytes to Sonos.")
         } catch (e: Exception) {
             addLog("Relay error for ${targetUrl.take(40)}: ${e.message}")
             try {

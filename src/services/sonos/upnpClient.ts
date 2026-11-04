@@ -68,13 +68,15 @@ export class UpnpClient {
     static async setAVTransportURI(
         device: ISonosDevice,
         streamUrl: string,
-        meta?: ISonosTrackMeta
+        meta?: ISonosTrackMeta,
+        mimeType: string = "audio/mpeg"
     ): Promise<void> {
         const title = escapeXml(meta?.title ?? "MusicFree Track");
         const artist = escapeXml(meta?.artist ?? "MusicFree");
         const album = escapeXml(meta?.album ?? "");
         const artUrl = meta?.albumArtUrl ? escapeXml(meta.albumArtUrl) : "";
 
+        // Standard UPnP DIDL-Lite metadata WITH the mandatory <res protocolInfo="..."> tag for Sonos
         const didlLite =
             `<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">` +
             `<item id="1" parentID="0" restricted="1">` +
@@ -83,6 +85,7 @@ export class UpnpClient {
             (album ? `<upnp:album>${album}</upnp:album>` : "") +
             (artUrl ? `<upnp:albumArtURI>${artUrl}</upnp:albumArtURI>` : "") +
             `<upnp:class>object.item.audioItem.musicTrack</upnp:class>` +
+            `<res protocolInfo="http-get:*:${mimeType}:*">${escapeXml(streamUrl)}</res>` +
             `</item>` +
             `</DIDL-Lite>`;
 
@@ -92,6 +95,31 @@ export class UpnpClient {
             `<CurrentURIMetaData>${escapeXml(didlLite)}</CurrentURIMetaData>`;
 
         await this.sendSoap(device, "AVTransport", "SetAVTransportURI", argsXml);
+    }
+
+    static async setAVTransportURIMinimal(
+        device: ISonosDevice,
+        streamUrl: string
+    ): Promise<void> {
+        // Minimal SetAVTransportURI without DIDL-Lite metadata (SoCo Python library fallback)
+        const argsXml =
+            `<InstanceID>0</InstanceID>` +
+            `<CurrentURI>${escapeXml(streamUrl)}</CurrentURI>` +
+            `<CurrentURIMetaData></CurrentURIMetaData>`;
+
+        await this.sendSoap(device, "AVTransport", "SetAVTransportURI", argsXml);
+    }
+
+    static async clearNextAVTransportURI(device: ISonosDevice): Promise<void> {
+        try {
+            const argsXml =
+                `<InstanceID>0</InstanceID>` +
+                `<NextURI></NextURI>` +
+                `<NextURIMetaData></NextURIMetaData>`;
+            await this.sendSoap(device, "AVTransport", "SetNextAVTransportURI", argsXml);
+        } catch {
+            // Optional command in UPnP, ignore if speaker does not support
+        }
     }
 
     static async play(device: ISonosDevice): Promise<void> {
@@ -131,6 +159,17 @@ export class UpnpClient {
         const stateMatch = xml.match(/<CurrentTransportState>(.*?)<\/CurrentTransportState>/i);
         const state = stateMatch?.[1]?.toUpperCase() ?? "STOPPED";
         return state as SonosPlaybackState;
+    }
+
+    static async getTransportInfoDetailed(
+        device: ISonosDevice
+    ): Promise<{ state: SonosPlaybackState; status: string }> {
+        const xml = await this.sendSoap(device, "AVTransport", "GetTransportInfo", "<InstanceID>0</InstanceID>");
+        const stateMatch = xml.match(/<CurrentTransportState>(.*?)<\/CurrentTransportState>/i);
+        const statusMatch = xml.match(/<CurrentTransportStatus>(.*?)<\/CurrentTransportStatus>/i);
+        const state = (stateMatch?.[1]?.toUpperCase() ?? "STOPPED") as SonosPlaybackState;
+        const status = statusMatch?.[1]?.toUpperCase() ?? "OK";
+        return { state, status };
     }
 
     static async setVolume(device: ISonosDevice, volume: number): Promise<void> {

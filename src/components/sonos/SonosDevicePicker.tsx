@@ -440,8 +440,9 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                                     style={[
                                                         styles.terminalLine,
                                                         line.includes("ERROR") && { color: "#ff5252" },
-                                                        line.includes("WARN") && { color: "#ffb142" },
+                                                        (line.includes("WARN") || line.includes("[DIAGNOSTIC]")) && { color: "#ffb142" },
                                                         line.includes("successfully") && { color: "#2ed573" },
+                                                        line.includes("[Native]") && { color: "#54a0ff" },
                                                     ]}>
                                                     {line}
                                                 </ThemeText>

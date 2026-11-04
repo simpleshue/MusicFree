@@ -1,4 +1,4 @@
-import { NativeModules } from "react-native";
+import { NativeModules, DeviceEventEmitter } from "react-native";
 import EventEmitter from "eventemitter3";
 import ReactNativeTrackPlayer from "react-native-track-player";
 import TrackPlayer from "@/core/trackPlayer";
@@ -54,6 +54,9 @@ class SonosManager extends EventEmitter {
     clearLogs() {
         this.logs = [];
         this.emit(SonosEvents.LogsUpdated, []);
+        if (SonosModule?.clearNativeLogs) {
+            SonosModule.clearNativeLogs();
+        }
     }
 
     getSettings(): ISonosSettings {
@@ -76,6 +79,13 @@ class SonosManager extends EventEmitter {
         }
 
         this.addLog("SonosManager initialized.");
+
+        // Listen to native real-time logs from Kotlin proxy
+        DeviceEventEmitter.addListener("SonosNativeLog", (logLine: string) => {
+            this.logs.unshift(logLine);
+            if (this.logs.length > 80) this.logs.pop();
+            this.emit(SonosEvents.LogsUpdated, [...this.logs]);
+        });
 
         // Non-invasively listen for track changes
         TrackPlayer.on(TrackPlayerEvents.CurrentMusicChanged, async (musicItem) => {
@@ -346,6 +356,21 @@ class SonosManager extends EventEmitter {
             this.addLog(`Using Local Audio Proxy URL: ${streamUrl.substring(0, 70)}...`);
         }
 
+        // Infer MIME type for Sonos <res protocolInfo="http-get:*:MIME:*">
+        let mimeType = "audio/mpeg";
+        const cleanUrl = realUrl.toLowerCase().split("?")[0];
+        if (cleanUrl.endsWith(".flac") || this.settings.audioFormat === "flac") {
+            mimeType = "audio/flac";
+        } else if (cleanUrl.endsWith(".wav") || this.settings.audioFormat === "wav") {
+            mimeType = "audio/wav";
+        } else if (cleanUrl.endsWith(".m4a") || cleanUrl.endsWith(".mp4")) {
+            mimeType = "audio/mp4";
+        } else if (cleanUrl.endsWith(".aac")) {
+            mimeType = "audio/aac";
+        } else if (cleanUrl.endsWith(".ogg")) {
+            mimeType = "audio/ogg";
+        }
+
         const meta: ISonosTrackMeta = {
             title: musicItem.title,
             artist: musicItem.artist,
@@ -354,9 +379,31 @@ class SonosManager extends EventEmitter {
             duration: musicItem.duration,
         };
 
-        this.addLog(`Sending SetAVTransportURI to ${this.activeDevice.name}...`);
-        await UpnpClient.setAVTransportURI(this.activeDevice, streamUrl, meta);
+        // 1. Jellyfin Pre-Stop Sequence: ensure speaker transport is STOPPED before loading track
+        this.addLog(`Ensuring speaker transport is STOPPED before loading track...`);
+        try {
+            await UpnpClient.stop(this.activeDevice);
+        } catch (ignored) {}
 
+        // Clear any queued next track
+        await UpnpClient.clearNextAVTransportURI(this.activeDevice);
+
+        // Allow speaker 100ms to settle state
+        await new Promise((r) => setTimeout(r, 100));
+
+        // 2. SetAVTransportURI with DIDL-Lite <res> tag, fallback to minimal
+        this.addLog(`Sending SetAVTransportURI (MIME: ${mimeType}) to ${this.activeDevice.name}...`);
+        try {
+            await UpnpClient.setAVTransportURI(this.activeDevice, streamUrl, meta, mimeType);
+        } catch (metaErr: any) {
+            this.addLog(`SetAVTransportURI with DIDL metadata notice: ${metaErr?.message}. Retrying with minimal URI...`);
+            await UpnpClient.setAVTransportURIMinimal(this.activeDevice, streamUrl);
+        }
+
+        // 3. Small delay for Sonos internal player to bind URI
+        await new Promise((r) => setTimeout(r, 100));
+
+        // 4. Send Play
         this.addLog(`Sending Play to ${this.activeDevice.name}...`);
         await UpnpClient.play(this.activeDevice);
 
@@ -364,6 +411,21 @@ class SonosManager extends EventEmitter {
         this.emit(SonosEvents.PlaybackStateChanged, "PLAYING");
         this.addLog(`Playback successfully initiated on ${this.activeDevice.name}!`);
         Toast.success(`Playing on ${this.activeDevice.name}`);
+
+        // 5. Active verification of Sonos playback state after 1.5s
+        setTimeout(async () => {
+            if (!this.activeDevice || !this.isCasting) return;
+            try {
+                const detail = await UpnpClient.getTransportInfoDetailed(this.activeDevice);
+                this.addLog(`Sonos verified state: ${detail.state} (status: ${detail.status})`);
+                if (detail.state === "STOPPED" || detail.status === "ERROR_OCCURRED") {
+                    this.addLog(`[DIAGNOSTIC] Speaker stopped immediately! Status: ${detail.status}`);
+                    Toast.warn(`Cast alert: Speaker stopped (${detail.status})`);
+                }
+            } catch (err: any) {
+                this.addLog(`Playback verification check: ${err?.message}`);
+            }
+        }, 1500);
     }
 
     private buildProxyUrl(rawUrl: string, headers: Record<string, string>): string {
