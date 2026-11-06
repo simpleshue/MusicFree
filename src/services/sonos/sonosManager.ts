@@ -1,4 +1,5 @@
 import { NativeModules, DeviceEventEmitter } from "react-native";
+import DeviceInfo from "react-native-device-info";
 import EventEmitter from "eventemitter3";
 import ReactNativeTrackPlayer from "react-native-track-player";
 import TrackPlayer from "@/core/trackPlayer";
@@ -78,7 +79,8 @@ class SonosManager extends EventEmitter {
             return;
         }
 
-        this.addLog("SonosManager initialized.");
+        const buildNum = DeviceInfo?.getBuildNumber?.() ?? "unknown";
+        this.addLog(`SonosManager initialized (Build ${buildNum}).`);
 
         // Listen to native real-time logs from Kotlin proxy
         DeviceEventEmitter.addListener("SonosNativeLog", (logLine: string) => {
@@ -144,6 +146,24 @@ class SonosManager extends EventEmitter {
     }
 
     async connectAndCast(device: ISonosDevice): Promise<boolean> {
+        if (this.activeDevice?.id === device.id && this.isCasting) {
+            this.addLog(`Already connected to ${device.name}. Re-casting current track...`);
+            const currentMusic = TrackPlayer.currentMusic;
+            if (currentMusic) {
+                try {
+                    await this.playTrackOnSonos(currentMusic);
+                    return true;
+                } catch (e: any) {
+                    this.addLog(`Failed to re-cast: ${e?.message}`);
+                    Toast.warn(`Cast failed: ${e?.message ?? "Unknown error"}`);
+                    return false;
+                }
+            } else {
+                Toast.success(`Connected to ${device.name}. Select a song to play!`);
+                return true;
+            }
+        }
+
         this.addLog(`Connecting to: ${device.name} (${device.ip}:${device.port})...`);
         Toast.success(`Connecting to ${device.name}...`);
 
@@ -271,7 +291,45 @@ class SonosManager extends EventEmitter {
     private async resolveTrackSource(
         musicItem: IMusic.IMusicItem
     ): Promise<{ url: string; headers: Record<string, string> }> {
-        // 1. Check if ReactNativeTrackPlayer currently has a real URL loaded
+        // 1. Primary: Always fetch a FRESH signed stream URL from the plugin.
+        // Cached or stored URLs from previous sessions expire quickly (NetEase/QQ/Bili token expiration).
+        try {
+            const plugin =
+                PluginManager.getByMedia(musicItem) ??
+                (musicItem.platform ? PluginManager.getByName(musicItem.platform) : undefined);
+
+            if (plugin?.methods?.getMediaSource) {
+                this.addLog(`Requesting fresh stream from plugin: ${plugin.name || musicItem.platform}...`);
+                const preferredQuality: IMusic.IQualityKey =
+                    this.settings.audioFormat === "flac" ? "super" : "standard";
+                const qualities: (IMusic.IQualityKey | string)[] = [
+                    preferredQuality,
+                    "standard",
+                    "high",
+                    "super",
+                    "128k",
+                    "320k",
+                    "flac",
+                ];
+
+                for (const q of qualities) {
+                    try {
+                        const src = await plugin.methods.getMediaSource(musicItem, q as any);
+                        if (src?.url && !src.url.startsWith("musicfree://")) {
+                            this.addLog(`Fresh stream obtained (${q}): ${src.url.substring(0, 60)}...`);
+                            return {
+                                url: src.url,
+                                headers: (src.headers as Record<string, string>) || {},
+                            };
+                        }
+                    } catch {}
+                }
+            }
+        } catch (e: any) {
+            this.addLog(`Plugin stream fetch notice: ${e?.message}`);
+        }
+
+        // 2. Fallback: Check if ReactNativeTrackPlayer currently has a real URL loaded
         try {
             const queue = await ReactNativeTrackPlayer.getQueue();
             if (
@@ -287,13 +345,13 @@ class SonosManager extends EventEmitter {
             }
         } catch {}
 
-        // 2. Check mediaCache
+        // 3. Fallback: Check mediaCache
         const cached = mediaCache.getMediaCache(musicItem) as IMusic.IMusicItem | null;
         if (cached?.url && !cached.url.startsWith("musicfree://")) {
             return { url: cached.url, headers: {} };
         }
 
-        // 3. Check musicItem sources
+        // 4. Fallback: Check musicItem sources
         if (musicItem.source) {
             const qualities = ["128k", "320k", "flac", "standard", "super", "high", "low"];
             for (const q of qualities) {
@@ -306,25 +364,7 @@ class SonosManager extends EventEmitter {
             }
         }
 
-        // 4. Query plugin directly if available
-        if (musicItem.platform) {
-            try {
-                const plugin = PluginManager.getByName(musicItem.platform);
-                if (plugin?.methods?.getMediaSource) {
-                    this.addLog(`Resolving stream from plugin: ${musicItem.platform}...`);
-                    const src = await plugin.methods.getMediaSource(musicItem, "standard");
-                    if (src?.url) {
-                        return {
-                            url: src.url,
-                            headers: (src.headers as Record<string, string>) || {},
-                        };
-                    }
-                }
-            } catch (e: any) {
-                this.addLog(`Plugin getMediaSource notice: ${e?.message}`);
-            }
-        }
-
+        // 5. Fallback: Check musicItem.url
         if (musicItem.url && !musicItem.url.startsWith("musicfree://")) {
             return { url: musicItem.url, headers: {} };
         }
@@ -380,7 +420,7 @@ class SonosManager extends EventEmitter {
         };
 
         // 1. Jellyfin Pre-Stop Sequence: ensure speaker transport is STOPPED before loading track
-        this.addLog(`Ensuring speaker transport is STOPPED before loading track...`);
+        this.addLog("Ensuring speaker transport is STOPPED before loading track...");
         try {
             await UpnpClient.stop(this.activeDevice);
         } catch (ignored) {}
@@ -388,8 +428,8 @@ class SonosManager extends EventEmitter {
         // Clear any queued next track
         await UpnpClient.clearNextAVTransportURI(this.activeDevice);
 
-        // Allow speaker 100ms to settle state
-        await new Promise((r) => setTimeout(r, 100));
+        // Allow speaker 150ms to settle state
+        await new Promise((r) => setTimeout(r, 150));
 
         // 2. SetAVTransportURI with DIDL-Lite <res> tag, fallback to minimal
         this.addLog(`Sending SetAVTransportURI (MIME: ${mimeType}) to ${this.activeDevice.name}...`);
@@ -401,11 +441,25 @@ class SonosManager extends EventEmitter {
         }
 
         // 3. Small delay for Sonos internal player to bind URI
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 150));
 
-        // 4. Send Play
+        // 4. Send Play (with retry if speaker is still in TRANSITIONING state)
         this.addLog(`Sending Play to ${this.activeDevice.name}...`);
-        await UpnpClient.play(this.activeDevice);
+        let playError: any = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                await UpnpClient.play(this.activeDevice);
+                playError = null;
+                break;
+            } catch (err: any) {
+                playError = err;
+                this.addLog(`Play attempt ${attempt} notice: ${err?.message}. Retrying in 400ms...`);
+                await new Promise((r) => setTimeout(r, 400));
+            }
+        }
+        if (playError) {
+            throw playError;
+        }
 
         this.playbackState = "PLAYING";
         this.emit(SonosEvents.PlaybackStateChanged, "PLAYING");

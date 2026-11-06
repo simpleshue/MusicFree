@@ -12,6 +12,7 @@ import rpx from "@/utils/rpx";
 import useColors from "@/hooks/useColors";
 import ThemeText from "@/components/base/themeText";
 import Divider from "@/components/base/divider";
+import DeviceInfo from "react-native-device-info";
 import sonosManager, { SonosEvents } from "@/services/sonos/sonosManager";
 import { ISonosDevice } from "@/services/sonos/types";
 import { ISonosSettings } from "@/services/sonos/settings";
@@ -95,9 +96,6 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
     }, [visible]);
 
     const handleSelectDevice = async (device: ISonosDevice) => {
-        if (activeDevice?.id === device.id) {
-            return;
-        }
         await sonosManager.connectAndCast(device);
     };
 
@@ -274,7 +272,7 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                                         </View>
                                                         {isCurrent ? (
                                                             <ThemeText fontColor="textHighlight" fontWeight="bold" fontSize="description">
-                                                                Casting
+                                                                Casting (Tap to recast)
                                                             </ThemeText>
                                                         ) : null}
                                                     </TouchableOpacity>
@@ -418,7 +416,7 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                 <View style={styles.logsContainer}>
                                     <View style={styles.logsHeader}>
                                         <ThemeText fontColor="textSecondary" fontSize="description">
-                                            REAL-TIME CAST & PROXY LOGS
+                                            {`REAL-TIME LOGS (BUILD ${DeviceInfo.getBuildNumber()})`}
                                         </ThemeText>
                                         <TouchableOpacity onPress={() => sonosManager.clearLogs()}>
                                             <ThemeText fontColor="textHighlight" fontSize="description">

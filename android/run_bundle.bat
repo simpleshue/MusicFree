@@ -1,0 +1,6 @@
+@echo off
+set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot"
+set "ANDROID_HOME=C:\Users\luyin\AppData\Local\Android\Sdk"
+set "PATH=%JAVA_HOME%\bin;%ANDROID_HOME%\platform-tools;C:\Program Files\nodejs;%PATH%"
+cd /d "%~dp0"
+call gradlew.bat bundleRelease --project-cache-dir "e:\docs\XX_Documents\code\musicfree\.gradle-project-cache" -g "e:\docs\XX_Documents\code\musicfree\.gradle-home" --no-daemon

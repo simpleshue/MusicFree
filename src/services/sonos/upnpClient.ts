@@ -45,24 +45,43 @@ export class UpnpClient {
         const controlPath = service === "AVTransport" ? device.controlUrl : device.renderingControlUrl;
         const url = `${device.baseUrl}${controlPath}`;
 
-        const soapBody = `<?xml version="1.0" encoding="utf-8"?>` +
-            `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">` +
-            `<s:Body>` +
+        const soapBody = "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
+            "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
+            "<s:Body>" +
             `<u:${action} xmlns:u="${serviceUrn}">` +
             argsXml +
             `</u:${action}>` +
-            `</s:Body>` +
-            `</s:Envelope>`;
+            "</s:Body>" +
+            "</s:Envelope>";
 
-        const response = await axios.post(url, soapBody, {
-            headers: {
-                "Content-Type": 'text/xml; charset="utf-8"',
-                SOAPACTION: `"${serviceUrn}#${action}"`,
-            },
-            timeout: 5000,
-        });
+        try {
+            const response = await axios.post(url, soapBody, {
+                headers: {
+                    "Content-Type": "text/xml; charset=\"utf-8\"",
+                    SOAPACTION: `"${serviceUrn}#${action}"`,
+                },
+                timeout: 5000,
+            });
 
-        return response.data;
+            return response.data;
+        } catch (error: any) {
+            const responseData = error?.response?.data;
+            if (responseData) {
+                const xmlStr = typeof responseData === "string" ? responseData : JSON.stringify(responseData);
+                const codeMatch = xmlStr.match(/<errorCode>(.*?)<\/errorCode>/i);
+                const descMatch = xmlStr.match(/<errorDescription>(.*?)<\/errorDescription>/i) ||
+                                  xmlStr.match(/<faultstring>(.*?)<\/faultstring>/i);
+                const code = codeMatch ? codeMatch[1] : (error.response?.status ?? "unknown");
+                const desc = descMatch ? descMatch[1] : (error.message || "UPnP Error");
+
+                const upnpErr = new Error(`SOAP ${action} failed: UPnP error ${code} (${desc})`);
+                (upnpErr as any).soapAction = action;
+                (upnpErr as any).errorCode = code;
+                (upnpErr as any).rawXml = xmlStr;
+                throw upnpErr;
+            }
+            throw error;
+        }
     }
 
     static async setAVTransportURI(
@@ -78,19 +97,19 @@ export class UpnpClient {
 
         // Standard UPnP DIDL-Lite metadata WITH the mandatory <res protocolInfo="..."> tag for Sonos
         const didlLite =
-            `<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">` +
-            `<item id="1" parentID="0" restricted="1">` +
+            "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\">" +
+            "<item id=\"1\" parentID=\"0\" restricted=\"1\">" +
             `<dc:title>${title}</dc:title>` +
             `<dc:creator>${artist}</dc:creator>` +
             (album ? `<upnp:album>${album}</upnp:album>` : "") +
             (artUrl ? `<upnp:albumArtURI>${artUrl}</upnp:albumArtURI>` : "") +
-            `<upnp:class>object.item.audioItem.musicTrack</upnp:class>` +
+            "<upnp:class>object.item.audioItem.musicTrack</upnp:class>" +
             `<res protocolInfo="http-get:*:${mimeType}:*">${escapeXml(streamUrl)}</res>` +
-            `</item>` +
-            `</DIDL-Lite>`;
+            "</item>" +
+            "</DIDL-Lite>";
 
         const argsXml =
-            `<InstanceID>0</InstanceID>` +
+            "<InstanceID>0</InstanceID>" +
             `<CurrentURI>${escapeXml(streamUrl)}</CurrentURI>` +
             `<CurrentURIMetaData>${escapeXml(didlLite)}</CurrentURIMetaData>`;
 
@@ -103,9 +122,9 @@ export class UpnpClient {
     ): Promise<void> {
         // Minimal SetAVTransportURI without DIDL-Lite metadata (SoCo Python library fallback)
         const argsXml =
-            `<InstanceID>0</InstanceID>` +
+            "<InstanceID>0</InstanceID>" +
             `<CurrentURI>${escapeXml(streamUrl)}</CurrentURI>` +
-            `<CurrentURIMetaData></CurrentURIMetaData>`;
+            "<CurrentURIMetaData></CurrentURIMetaData>";
 
         await this.sendSoap(device, "AVTransport", "SetAVTransportURI", argsXml);
     }
@@ -113,9 +132,9 @@ export class UpnpClient {
     static async clearNextAVTransportURI(device: ISonosDevice): Promise<void> {
         try {
             const argsXml =
-                `<InstanceID>0</InstanceID>` +
-                `<NextURI></NextURI>` +
-                `<NextURIMetaData></NextURIMetaData>`;
+                "<InstanceID>0</InstanceID>" +
+                "<NextURI></NextURI>" +
+                "<NextURIMetaData></NextURIMetaData>";
             await this.sendSoap(device, "AVTransport", "SetNextAVTransportURI", argsXml);
         } catch {
             // Optional command in UPnP, ignore if speaker does not support
