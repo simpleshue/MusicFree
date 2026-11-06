@@ -42,6 +42,7 @@
     "sidebar.checkUpdate": "检查更新",
     "sidebar.currentVersion": "当前版本: ",
     "sidebar.backToDesktop": "返回桌面",
+    "sidebar.pressAgainToExit": "再按一次返回桌面",
     "sidebar.exitApp": "退出应用",
     "sidebar.languageSettings": "语言设置",
     "checkUpdate.error.latestVersion": "当前已是最新版本",

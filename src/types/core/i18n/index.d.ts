@@ -52,6 +52,7 @@ export interface ILanguageData {
     "sidebar.checkUpdate": string; // 检查更新
     "sidebar.currentVersion": string; // 当前版本
     "sidebar.backToDesktop": string; // 返回桌面
+    "sidebar.pressAgainToExit": string; // 再按一次返回桌面
     "sidebar.exitApp": string; // 退出应用
     "sidebar.languageSettings": string; // 语言设置
 

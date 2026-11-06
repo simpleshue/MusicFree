@@ -42,6 +42,7 @@
     "sidebar.checkUpdate": "Check Update",
     "sidebar.currentVersion": "V",
     "sidebar.backToDesktop": "Back to Desktop",
+    "sidebar.pressAgainToExit": "Press again to return to desktop",
     "sidebar.exitApp": "Exit App",
     "sidebar.languageSettings": "Language Settings",
     "checkUpdate.error.latestVersion": "Already the latest version",

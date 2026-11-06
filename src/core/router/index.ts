@@ -1,4 +1,6 @@
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useNavigation, useRoute, createNavigationContainerRef } from "@react-navigation/native";
+
+export const navigationRef = createNavigationContainerRef<any>();
 import { useCallback } from "react";
 import { LogBox } from "react-native";
 
