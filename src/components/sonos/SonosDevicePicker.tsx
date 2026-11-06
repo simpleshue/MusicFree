@@ -13,6 +13,8 @@ import useColors from "@/hooks/useColors";
 import ThemeText from "@/components/base/themeText";
 import Divider from "@/components/base/divider";
 import DeviceInfo from "react-native-device-info";
+import Clipboard from "@react-native-clipboard/clipboard";
+import Toast from "@/utils/toast";
 import sonosManager, { SonosEvents } from "@/services/sonos/sonosManager";
 import { ISonosDevice } from "@/services/sonos/types";
 import { ISonosSettings } from "@/services/sonos/settings";
@@ -97,6 +99,16 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
 
     const handleSelectDevice = async (device: ISonosDevice) => {
         await sonosManager.connectAndCast(device);
+    };
+
+    const handleCopyLogs = () => {
+        if (!logs || logs.length === 0) {
+            Toast.warn("No logs to copy");
+            return;
+        }
+        const text = [...logs].reverse().join("\n");
+        Clipboard.setString(text);
+        Toast.success("Logs copied to clipboard");
     };
 
     const handleDisconnect = async () => {
@@ -418,11 +430,22 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                         <ThemeText fontColor="textSecondary" fontSize="description">
                                             {`REAL-TIME LOGS (BUILD ${DeviceInfo.getBuildNumber()})`}
                                         </ThemeText>
-                                        <TouchableOpacity onPress={() => sonosManager.clearLogs()}>
-                                            <ThemeText fontColor="textHighlight" fontSize="description">
-                                                Clear
-                                            </ThemeText>
-                                        </TouchableOpacity>
+                                        <View style={styles.logsActions}>
+                                            <TouchableOpacity
+                                                style={styles.logsActionBtn}
+                                                onPress={handleCopyLogs}>
+                                                <ThemeText fontColor="textHighlight" fontSize="description" fontWeight="medium">
+                                                    Copy
+                                                </ThemeText>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={styles.logsActionBtn}
+                                                onPress={() => sonosManager.clearLogs()}>
+                                                <ThemeText fontColor="textSecondary" fontSize="description">
+                                                    Clear
+                                                </ThemeText>
+                                            </TouchableOpacity>
+                                        </View>
                                     </View>
                                     <ScrollView
                                         style={[styles.terminalBox, { backgroundColor: "#111" }]}
@@ -433,17 +456,25 @@ export default function SonosDevicePicker({ visible, onClose }: ISonosDevicePick
                                             </ThemeText>
                                         ) : (
                                             logs.map((line, idx) => (
-                                                <ThemeText
+                                                <TouchableOpacity
                                                     key={idx}
-                                                    style={[
-                                                        styles.terminalLine,
-                                                        line.includes("ERROR") && { color: "#ff5252" },
-                                                        (line.includes("WARN") || line.includes("[DIAGNOSTIC]")) && { color: "#ffb142" },
-                                                        line.includes("successfully") && { color: "#2ed573" },
-                                                        line.includes("[Native]") && { color: "#54a0ff" },
-                                                    ]}>
-                                                    {line}
-                                                </ThemeText>
+                                                    activeOpacity={0.7}
+                                                    onLongPress={() => {
+                                                        Clipboard.setString(line);
+                                                        Toast.success("Line copied to clipboard");
+                                                    }}>
+                                                    <ThemeText
+                                                        selectable
+                                                        style={[
+                                                            styles.terminalLine,
+                                                            line.includes("ERROR") && { color: "#ff5252" },
+                                                            (line.includes("WARN") || line.includes("[DIAGNOSTIC]")) && { color: "#ffb142" },
+                                                            line.includes("successfully") && { color: "#2ed573" },
+                                                            line.includes("[Native]") && { color: "#54a0ff" },
+                                                        ]}>
+                                                        {line}
+                                                    </ThemeText>
+                                                </TouchableOpacity>
                                             ))
                                         )}
                                     </ScrollView>
@@ -623,6 +654,15 @@ const styles = StyleSheet.create({
         justifyContent: "space-between",
         alignItems: "center",
         marginBottom: rpx(12),
+    },
+    logsActions: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: rpx(20),
+    },
+    logsActionBtn: {
+        paddingHorizontal: rpx(8),
+        paddingVertical: rpx(4),
     },
     terminalBox: {
         borderRadius: rpx(16),
