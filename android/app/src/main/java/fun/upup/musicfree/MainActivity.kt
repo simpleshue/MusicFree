@@ -10,6 +10,9 @@ import android.os.Bundle
 
 class MainActivity : ReactActivity() {
 
+  private var isDoubleBackExit: Boolean = false
+  private var lastBackActionTime: Long = 0
+
   /**
    * Returns the name of the main component registered from JavaScript. This is used to schedule
    * rendering of the component.
@@ -27,5 +30,27 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
       SplashScreenManager.registerOnActivity(this)
       super.onCreate(null);
+  }
+
+  override fun onBackPressed() {
+      val now = System.currentTimeMillis()
+      isDoubleBackExit = (now - lastBackActionTime < 2000)
+      lastBackActionTime = now
+
+      val delegate = reactActivityDelegate
+      if (delegate == null || !delegate.onBackPressed()) {
+          invokeDefaultOnBackPressed()
+      }
+  }
+
+  override fun invokeDefaultOnBackPressed() {
+      runOnUiThread {
+          if (isDoubleBackExit) {
+              super.invokeDefaultOnBackPressed()
+          } else {
+              val msg = if (java.util.Locale.getDefault().language.startsWith("zh")) "再按一次返回桌面" else "Press again to return to desktop"
+              android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+          }
+      }
   }
 }
